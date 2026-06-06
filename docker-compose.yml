@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: jwt_auth
+      POSTGRES_USER: jwt_auth
+      POSTGRES_PASSWORD: jwt_auth_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jwt_auth -d jwt_auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

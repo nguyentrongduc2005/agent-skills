@@ -1,0 +1,418 @@
+# JWT Authentication API Design
+
+## Problem
+
+The project needs a new Node.js REST API that supports user registration and
+login. User data must be stored in PostgreSQL, authentication must use JWT
+access and refresh tokens, and the local database must run through Docker
+Compose.
+
+## Goal
+
+Create a small, maintainable backend foundation that:
+
+- Registers users with an email, password, and name.
+- Authenticates registered users.
+- Issues short-lived access tokens and longer-lived refresh tokens.
+- Refreshes an access token without requiring the user to log in again.
+- Returns the authenticated user's profile from a protected endpoint.
+- Runs PostgreSQL locally through Docker Compose.
+
+## Scope
+
+### In Scope
+
+- Node.js with Express and TypeScript.
+- A versioned JSON REST API under `/api/v1`.
+- PostgreSQL persistence through Prisma ORM and Prisma migrations.
+- Password hashing with bcrypt.
+- JWT access and refresh tokens.
+- Request validation with Zod.
+- Unit and integration tests for authentication behavior.
+- Environment-based configuration with a documented example file.
+- A Docker Compose service for the development PostgreSQL database.
+
+### Out of Scope
+
+- Frontend or server-rendered user interface.
+- Logout, token revocation, refresh-token persistence, and per-device sessions.
+- Email verification, password reset, social login, and multi-factor
+  authentication.
+- Roles and permissions.
+- User profile editing.
+- Containerizing the Node.js API.
+- Production deployment configuration.
+
+## Requirements
+
+### Functional Requirements
+
+1. A client can register using `email`, `password`, and `name`.
+2. Email addresses are unique and are normalized by trimming surrounding
+   whitespace and converting to lowercase before storage and lookup.
+3. A client can log in using `email` and `password`.
+4. Successful registration and login return the public user object, an access
+   token, and a refresh token.
+5. A client can exchange a valid refresh token for a new access token and a new
+   refresh token.
+6. A client with a valid access token can retrieve its user profile.
+7. The API exposes a health endpoint for basic process availability.
+
+### Security Requirements
+
+- Passwords must be at least 8 characters and at most 72 UTF-8 bytes so bcrypt
+  never silently truncates them. They must never be stored or logged in
+  plaintext.
+- Email addresses must be syntactically valid after normalization.
+- Passwords are hashed with bcrypt before persistence.
+- Authentication errors use a generic message so login does not reveal whether
+  an account exists.
+- Access and refresh tokens use different secrets.
+- Access tokens expire after 15 minutes.
+- Refresh tokens expire after 7 days.
+- JWT payloads contain `sub` as the user ID and `type` as either `access` or
+  `refresh`.
+- Protected endpoints accept only tokens whose `type` is `access`.
+- The refresh endpoint accepts only tokens whose `type` is `refresh`.
+- Secrets and database credentials are loaded from environment variables and
+  are not committed.
+- API responses never include `passwordHash`.
+
+Because refresh tokens are stateless and are not stored, rotated, or revoked,
+an issued refresh token remains valid until it expires. The refresh endpoint
+issues a new token pair, but previously issued refresh tokens remain usable
+until their own expiration.
+
+## Proposed Design
+
+### Technology
+
+- Node.js on the current active LTS release available at implementation time.
+- Express with TypeScript.
+- Prisma ORM and PostgreSQL.
+- Zod for boundary validation.
+- bcrypt for password hashing.
+- A maintained JWT library for signing and verification.
+- Vitest and Supertest for unit and HTTP integration tests.
+
+Exact dependency versions will be locked by the package manager during
+implementation.
+
+### Project Structure
+
+```text
+src/
+  app.ts
+  server.ts
+  config/
+  middleware/
+  modules/
+    auth/
+      auth.controller.ts
+      auth.routes.ts
+      auth.schemas.ts
+      auth.service.ts
+    users/
+      user.repository.ts
+      user.types.ts
+  shared/
+    errors/
+    http/
+prisma/
+  schema.prisma
+  migrations/
+tests/
+docker-compose.yml
+```
+
+Responsibilities are deliberately narrow:
+
+- Routes define HTTP paths and middleware.
+- Controllers translate HTTP requests and responses.
+- Schemas validate and normalize external input.
+- The auth service owns registration, credential verification, and token
+  issuance.
+- The user repository owns Prisma queries for users.
+- Authentication middleware verifies access tokens and provides the user ID to
+  protected handlers.
+- Shared error middleware maps application errors to the common error format.
+
+### Data Model
+
+The `users` table contains:
+
+| Field          | Type     | Rules                                  |
+| -------------- | -------- | -------------------------------------- |
+| `id`           | UUID     | Primary key, generated by Prisma       |
+| `email`        | String   | Required, normalized lowercase, unique |
+| `name`         | String   | Required, trimmed, 1-100 characters    |
+| `passwordHash` | String   | Required, never exposed                |
+| `createdAt`    | DateTime | Generated on creation                  |
+| `updatedAt`    | DateTime | Updated automatically                  |
+
+PostgreSQL stores timestamps in UTC. The unique constraint on `email` is the
+final authority for duplicate registration, including concurrent requests.
+
+### API Contract
+
+All request and response bodies use JSON.
+
+#### `POST /api/v1/auth/register`
+
+Request:
+
+```json
+{
+  "email": "user@example.com",
+  "password": "password123",
+  "name": "Example User"
+}
+```
+
+Success: `201 Created`
+
+```json
+{
+  "data": {
+    "user": {
+      "id": "uuid",
+      "email": "user@example.com",
+      "name": "Example User",
+      "createdAt": "2026-06-06T00:00:00.000Z",
+      "updatedAt": "2026-06-06T00:00:00.000Z"
+    },
+    "accessToken": "jwt",
+    "refreshToken": "jwt"
+  }
+}
+```
+
+Duplicate email returns `409 Conflict`. Invalid input returns
+`400 Bad Request`.
+
+#### `POST /api/v1/auth/login`
+
+Request:
+
+```json
+{
+  "email": "user@example.com",
+  "password": "password123"
+}
+```
+
+Success: `200 OK`, with the same `data` shape as registration. An unknown email
+or incorrect password returns `401 Unauthorized` with the same generic error.
+
+#### `POST /api/v1/auth/refresh`
+
+Request:
+
+```json
+{
+  "refreshToken": "jwt"
+}
+```
+
+Success: `200 OK`
+
+```json
+{
+  "data": {
+    "accessToken": "jwt",
+    "refreshToken": "jwt"
+  }
+}
+```
+
+The service verifies the signature, expiration, and token type, then confirms
+that the user identified by `sub` still exists. Invalid, expired, malformed, or
+wrong-type tokens return `401 Unauthorized`.
+
+#### `GET /api/v1/auth/me`
+
+Requires `Authorization: Bearer <access-token>`.
+
+Success: `200 OK`
+
+```json
+{
+  "data": {
+    "user": {
+      "id": "uuid",
+      "email": "user@example.com",
+      "name": "Example User",
+      "createdAt": "2026-06-06T00:00:00.000Z",
+      "updatedAt": "2026-06-06T00:00:00.000Z"
+    }
+  }
+}
+```
+
+Missing, invalid, expired, or wrong-type tokens return `401 Unauthorized`.
+
+#### `GET /health`
+
+Returns `200 OK` with:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+This is a process health check and does not query PostgreSQL.
+
+### Error Contract
+
+Errors use one stable shape:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request validation failed",
+    "details": []
+  }
+}
+```
+
+`details` is optional and may contain safe field-level validation information.
+Stack traces, Prisma errors, secrets, password values, and tokens are never
+returned.
+
+Expected error codes are:
+
+| HTTP status | Code                                               |
+| ----------- | -------------------------------------------------- |
+| 400         | `VALIDATION_ERROR`                                 |
+| 401         | `AUTHENTICATION_REQUIRED` or `INVALID_CREDENTIALS` |
+| 409         | `EMAIL_ALREADY_EXISTS`                             |
+| 404         | `NOT_FOUND`                                        |
+| 500         | `INTERNAL_SERVER_ERROR`                            |
+
+### Configuration
+
+The application requires these environment variables:
+
+- `DATABASE_URL`
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+
+The application supports these optional environment variables:
+
+- `PORT`, defaulting to `3000`
+- `JWT_ACCESS_EXPIRES_IN`, defaulting to `15m`
+- `JWT_REFRESH_EXPIRES_IN`, defaulting to `7d`
+- `BCRYPT_SALT_ROUNDS`, defaulting to `12`
+
+Startup validates configuration and fails with a clear non-secret error when a
+required value is missing or invalid. An `.env.example` documents safe sample
+values.
+
+### Docker Compose
+
+`docker-compose.yml` defines one PostgreSQL service with:
+
+- A supported PostgreSQL image pinned to a major version.
+- Development-only credentials supplied through environment variables.
+- Port `5432` exposed to the host.
+- A named volume for database persistence.
+- A health check using `pg_isready`.
+
+The API runs on the host and connects through `DATABASE_URL`. Database schema
+creation remains the responsibility of Prisma migrations, not container
+startup scripts.
+
+## Data Flow
+
+### Registration
+
+1. Zod validates and normalizes the request.
+2. The service hashes the password.
+3. The repository creates the user.
+4. A database uniqueness violation is mapped to `EMAIL_ALREADY_EXISTS`.
+5. The service signs an access token and refresh token.
+6. The controller returns the public user and token pair.
+
+### Login
+
+1. Zod validates and normalizes the request.
+2. The repository looks up the user by normalized email.
+3. The service performs password verification.
+4. Invalid credentials produce the same generic error.
+5. Valid credentials produce the public user and token pair.
+
+### Token Refresh
+
+1. The service verifies the refresh token with the refresh secret.
+2. It rejects tokens whose type is not `refresh`.
+3. It checks that the referenced user still exists.
+4. It issues a new access token and refresh token.
+
+### Authenticated Profile
+
+1. Middleware extracts the bearer token.
+2. It verifies the token with the access secret and requires type `access`.
+3. The handler loads the user using the `sub` claim.
+4. It returns the public user or an authentication error if the user no longer
+   exists.
+
+## Edge Cases
+
+- Registration email differs only by letter case: treat it as a duplicate.
+- Concurrent registrations use the database constraint to prevent duplicates.
+- Names containing only whitespace fail validation.
+- Missing, malformed, or non-string request fields fail validation.
+- Passwords shorter than 8 characters or longer than 72 UTF-8 bytes fail
+  validation.
+- Malformed authorization headers are unauthorized.
+- An access token sent to the refresh endpoint is unauthorized.
+- A refresh token sent to `/me` is unauthorized.
+- Expired tokens are unauthorized.
+- Tokens signed with the wrong secret are unauthorized.
+- Tokens referencing deleted users are unauthorized.
+- Database and unexpected errors are logged without sensitive values and
+  returned as a generic server error.
+
+## Testing Notes
+
+### Unit Tests
+
+- Registration normalizes email and hashes passwords.
+- Registration rejects passwords outside the supported bcrypt length range.
+- Registration maps duplicate email to a conflict.
+- Login accepts valid credentials and rejects invalid credentials generically.
+- Token generation includes the correct subject, type, and expiry.
+- Refresh rejects wrong token types and missing users.
+- Public user mapping excludes `passwordHash`.
+
+### Integration Tests
+
+Integration tests run against an isolated PostgreSQL test database and cover:
+
+- Successful registration.
+- Validation failures and duplicate registration.
+- Successful and failed login.
+- Successful token refresh.
+- Invalid, expired, and wrong-type tokens.
+- Successful `/me` and unauthorized variants.
+- The health endpoint.
+
+Tests must be deterministic, clean their data, and never use a production
+database.
+
+## Acceptance Criteria
+
+- The project installs, type-checks, lints, and tests through documented npm
+  scripts.
+- `docker compose up -d` starts a healthy PostgreSQL service.
+- Prisma migrations create the `users` table with the specified constraints.
+- Registration persists a normalized user and returns a token pair.
+- Duplicate registration returns `409` without exposing database internals.
+- Login returns a token pair only for valid credentials.
+- Refresh returns a new token pair only for a valid refresh token.
+- `/api/v1/auth/me` returns the authenticated public user only for a valid
+  access token.
+- Password hashes and secrets are absent from API responses and test output.
+- All specified unit and integration tests pass.
