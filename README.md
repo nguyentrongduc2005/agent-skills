@@ -1,195 +1,70 @@
-# JWT Authentication API
+# Agent Skills Framework
 
-A secure, fully-tested REST API built with Node.js, Express, TypeScript, and Prisma ORM, utilizing PostgreSQL for persistence.
-
-## Prerequisites
-
-- **Node.js**: `v24` or higher
-- **npm**: `v11` or higher
-- **Docker & Docker Compose**: For local PostgreSQL database provisioning
+This repository defines a structured, modular set of agent instructions, rules, and capability modules (skills) designed to guide agentic workflows through the software development lifecycle. By following this framework, autonomous AI coding assistants can maintain consistent quality, adhere to codebase conventions, and execute tasks safely.
 
 ---
 
-## Getting Started
+## Directory Structure
 
-### 1. Configure Environment Variables
+The framework is organized under the `.agents/` directory:
 
-Copy the provided example environment files:
-
-```bash
-# Copy development configuration
-cp .env.example .env
-
-# Copy test configuration (used for unit/integration tests)
-cp .env.test.example .env.test
+```text
+.agents/
+├── context/       # High-level context for project orientation
+├── rules/         # Coding standards, architectural and design guidelines
+└── skills/        # Workflow stages and executable task guides
 ```
 
-> [!NOTE]
-> The application startup loads `.env` by default, whereas test scripts explicitly load `.env.test` using `dotenv-cli`.
+### 1. Context (`.agents/context/`)
 
-### 2. Start PostgreSQL Database
+Contains background information to orient the agent to the domain, terms, and boundaries:
 
-Spin up the local PostgreSQL database using Docker Compose:
+- `project-overview.md` — Explains the purpose, target users, boundaries, and system flow.
+- `glossary.md` — Defines domain terms and project-specific language.
+- `architecture-overview.md` — Orients the agent to modules, services, and ownership boundaries.
 
-```bash
-docker compose up -d
-```
+### 2. Rules (`.agents/rules/`)
 
-This starts a container with two databases:
+Mandatory instructions defining the quality standards and architectural guidelines for code changes:
 
-- `jwt_auth` (Development)
-- `jwt_auth_test` (Isolated testing)
+- `coding-style.md` — Rules for formatting, conventions, and language features.
+- `architecture.md` — Boundary constraints, patterns, and component structures.
+- `api-design.md` — REST API endpoint conventions, naming, versioning, and error envelopes.
+- `database.md` — Prisma migrations, indexing, naming conventions, and data ownership rules.
+- `security.md` — Input validation guidelines, secret-handling constraints, and cryptographic policies.
+- `testing.md` — Test structure, vitest mocking guidelines, and isolation policies.
+- `documentation.md` — Requirements for maintaining official developer documents.
 
-### 3. Install Dependencies
+### 3. Skills (`.agents/skills/`)
 
-Install all package dependencies:
+Matching capability folders for specific workflow stages. Each folder contains a `SKILL.md` that defines constraints, checklists, and processes:
 
-```bash
-npm install
-```
-
-### 4. Run Schema Migrations and Client Generation
-
-Sync the database schemas with the Prisma model definition and generate the TypeScript Prisma client:
-
-```bash
-# Generate Prisma Client
-npm run prisma:generate
-
-# Run migrations on development database
-npm run prisma:migrate:dev -- --name init
-
-# Deploy migrations to test database
-npm run db:test:migrate
-```
-
-### 5. Start the Server
-
-Run the development server with live reload:
-
-```bash
-npm run dev
-```
-
-The server will start listening on port `3000` (or the `PORT` specified in your `.env`).
+| Skill               | Folder / Path      | Purpose & Usage                                                                                                                                    |
+| :------------------ | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Brainstorming**   | `brainstorming/`   | Designing features, components, behavior changes, and resolving design decisions. Outputs an approved spec to `docs/specs/`.                       |
+| **Writing Plans**   | `writing-plans/`   | Translating approved specifications into actionable implementation plans. Outputs a plan to `docs/plans/`.                                         |
+| **Executing Plans** | `executing-plans/` | Implementing changes step-by-step from an approved plan. Focuses on execution and local verification.                                              |
+| **Fix**             | `fix/`             | Resolving bugs, regressions, failing tests, compilation/lint errors, or broken behaviors.                                                          |
+| **Git**             | `git/`             | Formatting, inspecting, staging, and committing changes. Performs safety checks before prompting for push approval.                                |
+| **Loop**            | `loop/`            | Iterative debugging and verification cycles when multiple failures or flaky tests require repeated assessment.                                     |
+| **Docs**            | `docs/`            | Creating or updating official codebase documentation (`docs/architecture.md`, `docs/api.md`, `docs/database.md`) based on implementation evidence. |
 
 ---
 
-## Commands Reference
+## Workflow Workflow Stage Progression
 
-- `npm run dev`: Start development server with file watch
-- `npm run build`: Compile TypeScript codebase to JavaScript in `dist/`
-- `npm run start`: Run the compiled server from `dist/`
-- `npm run typecheck`: Run TypeScript compiler type check (`noEmit`)
-- `npm run lint`: Run ESLint to analyze code style and quality
-- `npm run format`: Format code files with Prettier
-- `npm run format:check`: Verify formatting of files
-- `npm run test:unit`: Run Vitest unit tests
-- `npm run test:integration`: Run Vitest PostgreSQL-backed HTTP integration tests
-- `npm run test`: Run both unit and integration tests
-- `npm run verify`: Format, lint, type-check, and run all tests
+For any feature development or major change, agents progress sequentially through the matching workflow skills:
 
-To safely shut down the local database:
-
-```bash
-docker compose down
+```mermaid
+flowchart LR
+    A[Brainstorming] -->|Create Spec| B[Writing Plans]
+    B -->|Create Plan| C[Executing Plans]
+    C -->|Implement & Verify| D[Git]
+    D -->|Commit & Push| E[Done]
 ```
 
----
+### Safety and Quality Gates
 
-## API Contract & Usage Examples
-
-All API requests and responses use JSON format. The API is versioned under `/api/v1`.
-
-### 1. Register User
-
-- **Endpoint**: `POST /api/v1/auth/register`
-- **Body**:
-  ```json
-  {
-    "email": "user@example.com",
-    "password": "password123",
-    "name": "Jane Doe"
-  }
-  ```
-
-**Example Curl**:
-
-```bash
-curl -X POST http://localhost:3000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com", "password":"password123", "name":"Jane Doe"}'
-```
-
-### 2. Log In
-
-- **Endpoint**: `POST /api/v1/auth/login`
-- **Body**:
-  ```json
-  {
-    "email": "user@example.com",
-    "password": "password123"
-  }
-  ```
-
-**Example Curl**:
-
-```bash
-curl -X POST http://localhost:3000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com", "password":"password123"}'
-```
-
-### 3. Exchange Refresh Token
-
-Exchanges a valid refresh token for a new access token and refresh token.
-
-- **Endpoint**: `POST /api/v1/auth/refresh`
-- **Body**:
-  ```json
-  {
-    "refreshToken": "<your-refresh-token>"
-  }
-  ```
-
-**Example Curl**:
-
-```bash
-curl -X POST http://localhost:3000/api/v1/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refreshToken":"<your-refresh-token>"}'
-```
-
-### 4. Retrieve Profile
-
-Retrieves the authenticated user's profile. Requires a Bearer Access Token.
-
-- **Endpoint**: `GET /api/v1/auth/me`
-- **Headers**: `Authorization: Bearer <access-token>`
-
-**Example Curl**:
-
-```bash
-curl -X GET http://localhost:3000/api/v1/auth/me \
-  -H "Authorization: Bearer <your-access-token>"
-```
-
-### 5. Health Check
-
-Basic health check endpoint independent of database queries.
-
-- **Endpoint**: `GET /health`
-
-**Example Curl**:
-
-```bash
-curl -X GET http://localhost:3000/health
-```
-
----
-
-## Token Lifetimes & Limits
-
-- **Access Token**: Expires after **15 minutes** (configured via `JWT_ACCESS_EXPIRES_IN`).
-- **Refresh Token**: Expires after **7 days** (configured via `JWT_REFRESH_EXPIRES_IN`).
-- **Limitation**: Refresh tokens are stateless. They cannot be revoked, and previously issued refresh tokens remain valid until their expiration date.
+- **Zero-Touch Rules**: During plan writing or brainstorming, agents must never modify application files.
+- **Verification Requirement**: Work is only considered complete once the aggregate verification command (`npm run verify`) passes cleanly.
+- **Double-Approval**: Major changes require plan approval before execution, and commit validation before remote push.
